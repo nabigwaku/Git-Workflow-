@@ -15,15 +15,10 @@
                when lower(trim(ut.source)) = 'food' and lower(trim(ut.reason)) like '%food for%' then 'food'
                else lower(ut.reason) end                                        as reason,
            ut.transaction_type,
-           recipient_user_id,
-           sender_user_id,
-           food_delivery_order_id,
-           done_by,
-           ut.source,
-           case when u.user_type = 'agent' then 1 else 2 end                   as partner_group_0,
-           u.user_type   as     partner_group,
-           ut.city_id,
-           ut.id as txn_id,
+           sddjksdksdjsd,
+           ssdfsfsd,
+           dsdfsdfsd,
+           dfsfsdfsdf,
            balance
     from user_transaction ut
              left join "user" u on ut.user_id = u.id
