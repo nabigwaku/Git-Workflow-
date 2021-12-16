@@ -1,0 +1,26 @@
+/*
+REPORT NAME:        Guardian Health Transactions
+METABASE REPORT ID: 1691
+CREATED BY:         gloriakandi@safeboda.com
+CREATED ON:         2021-12-15
+DESCRIPTION:
+    - Displays all transactions from guardian health by specified dates
+QUERY DOCUMENTATION
+    - 
+EDIT HISTORY:
+    [date (YYYY-MM-DD)],  [email addres] 
+        - changes made
+*/
+SELECT co.id AS till_number,
+       co.name AS vendor_name,
+       tx.id AS transaction_id,
+       (tx.inserted_at at time zone 'utc' at time zone 'eat') AS timestamp,
+       tx.amount AS amount,
+       tx.transaction_type AS transaction_type
+FROM public.user_transaction tx
+LEFT JOIN public."user" u ON u.id=tx.user_id
+LEFT JOIN janus.accounts ac ON u.order_manager_user_id=ac.acct_id
+LEFT JOIN janus.companies co ON ac.id=co.account_id
+WHERE u.phone_number in('+256778134960','+256780250743','+256778139724')
+    AND tx.status='completed'
+    AND (tx.inserted_at at time zone 'utc' at time zone 'eat')::date between {{start_date}} and {{end_date}}

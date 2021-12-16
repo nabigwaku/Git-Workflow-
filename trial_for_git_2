@@ -1,0 +1,145 @@
+ 
+   WITH janus_users AS (
+       SELECT
+           inv.first_name,
+           inv.last_name,
+           acc.id AS account_id, -- Note: this is the janus internal id.
+           inv.inserted_at AS ts_joined_utc, -- still stored into user table.
+           acc.email,
+           acc.acct_id AS order_manager_user_id, -- this variable joins with the user table.
+           acc.type,
+           acc.status,
+           CONCAT('+', dev.country_code::text, dev.phone::text) AS phone_number,
+           acc.city,
+           CASE
+               WHEN acc.city = 'KLA' THEN 1
+               WHEN acc.city = 'IBD' THEN 4
+               ELSE NULL
+           END AS signup_city_id, -- still stored into user table.
+           dev.os AS os,
+           replace((dev.metadata -> 'app_version')::text,'"','') AS app_version,
+           replace((dev.metadata -> 'device_name')::text,'"','') AS device_name
+       FROM janus.individuals inv
+           LEFT JOIN janus.accounts acc ON inv.account_id = acc.id
+           LEFT JOIN janus.devices dev ON dev.account_id = acc.id
+       WHERE acc.type IN ('individual.agent.t1', 'individual.agent.t2')
+   ),
+   device AS (
+       SELECT
+           dm.user_id as user_id,
+           (ARRAY_AGG(dm.app_version ORDER BY dm.inserted_at DESC))[1] as current_app_version,
+           (ARRAY_AGG(lower(trim(dm.os)) ORDER BY dm.inserted_at DESC))[1] as current_os,
+           (ARRAY_AGG(lower(trim(dm.device)) ORDER BY dm.inserted_at DESC))[1] as device_name
+       FROM device_metadata AS dm
+       GROUP BY user_id
+   ),
+   agent_bio AS (
+       SELECT
+           u.id AS user_id,
+           sb_timezone(janus.ts_joined_utc, u.signup_city_id)::date as date_joined,
+           true is_janus_user,
+           janus.type,
+           janus.status,
+           concat_ws(' ', coalesce(janus.first_name, u.first_name), coalesce(janus.last_name, u.last_name)) AS agent_name,
+           coalesce(janus.phone_number, u.phone_number) AS phone_number,
+           coalesce(janus.email, u.email) AS email,
+           coalesce(janus.app_version, device.current_app_version) AS current_app_version,
+           coalesce(janus.os, device.current_os) AS current_os,
+           coalesce(janus.device_name, device.device_name) AS device_name,
+           u.signup_country_id,
+           u.signup_city_id
+       FROM janus_users janus
+           LEFT JOIN "user" u ON janus.order_manager_user_id = u.order_manager_user_id
+           LEFT JOIN device ON u.id = device.user_id
+       UNION ALL
+       SELECT
+           u.id AS user_id,
+           sb_timezone(u.inserted_at, u.signup_city_id) AS date_joined,
+           false is_janus_user,
+           smm.service AS type,
+           NULL AS status,
+           concat_ws(' ', u.first_name, u.last_name) AS agent_name,
+           u.phone_number,
+           u.email,
+           device.current_app_version,
+           device.current_os,
+           device.device_name,
+           u.signup_country_id,
+           u.signup_city_id
+       FROM sb_merchants_mv smm
+           LEFT JOIN "user" u ON smm.user_id = u.id
+           LEFT JOIN device ON u.id = device.user_id
+       WHERE
+           service IN ('cashless_agent_driver_app','shell_cashout_driver_app','shell_cashout_passenger_app','shell_select_agents_driver_app')
+   ),
+   payments AS (
+       SELECT
+           bio.user_id as payments_user_id,
+          
+           MIN(inserted_at) FILTER (WHERE transaction_class = 'A2A')                           AS a2a_first_ts,
+           MIN(inserted_at) FILTER (WHERE transaction_class = 'A2S')                           AS a2s_first_ts,
+           MIN(inserted_at) FILTER (WHERE transaction_class = 'A2P')                           AS a2p_first_ts,
+           MIN(inserted_at) FILTER (WHERE transaction_class = 'S2A')                           AS s2a_first_ts,
+           MIN(inserted_at) FILTER (WHERE transaction_class = 'P2A')                           AS p2a_first_ts,
+           MAX(inserted_at) FILTER (WHERE transaction_class = 'A2A')                           AS a2a_last_ts,
+           MAX(inserted_at) FILTER (WHERE transaction_class = 'A2S')                           AS a2s_last_ts,
+           MAX(inserted_at) FILTER (WHERE transaction_class = 'A2P')                           AS a2p_last_ts,
+           MAX(inserted_at) FILTER (WHERE transaction_class = 'S2A')                           AS s2a_last_ts,
+           MAX(inserted_at) FILTER (WHERE transaction_class = 'P2A')                           AS p2a_last_ts,
+?
+           COUNT(DISTINCT sender_user_id) FILTER (WHERE transaction_class = 'A2S')             AS a2s_senders,
+           COUNT(DISTINCT recipient_user_id) FILTER (WHERE transaction_class = 'A2S')          AS a2s_recipients,
+           COUNT(*) FILTER (WHERE transaction_class = 'A2S')                                   AS a2s_volume,
+           SUM(amount) FILTER (WHERE transaction_class = 'A2S')                                AS a2s_value,
+           COUNT(DISTINCT sender_user_id) FILTER (WHERE transaction_class = 'A2A')             AS a2a_senders,
+           COUNT(DISTINCT recipient_user_id) FILTER (WHERE transaction_class = 'A2A')          AS a2a_recipients,
+           COUNT(*) FILTER (WHERE transaction_class = 'A2A')                                   AS a2a_volume,
+           SUM(amount) FILTER (WHERE transaction_class = 'A2A')                                AS a2a_value,
+           COUNT(DISTINCT sender_user_id) FILTER (WHERE transaction_class = 'S2A')             AS s2a_senders,
+           COUNT(DISTINCT recipient_user_id) FILTER (WHERE transaction_class = 'S2A')          AS s2a_recipents,
+           COUNT(*) FILTER (WHERE transaction_class = 'S2A')                                   AS s2a_volume,
+           SUM(amount) FILTER (WHERE transaction_class = 'S2A')                                AS s2a_value,
+           COUNT(DISTINCT sender_user_id) FILTER (WHERE transaction_class = 'P2A')             AS p2a_senders,
+           COUNT(DISTINCT recipient_user_id) FILTER (WHERE transaction_class = 'P2A')          AS p2a_recipients,
+           COUNT(*)FILTER (WHERE transaction_class = 'P2A')                                    AS p2a_volume,
+           SUM(amount) FILTER (WHERE transaction_class = 'P2A')                                AS p2a_value,
+           COUNT(DISTINCT sender_user_id) FILTER (WHERE transaction_class = 'A2P')             AS a2p_senders,
+           COUNT(DISTINCT recipient_user_id) FILTER (WHERE transaction_class = 'A2P')          AS a2p_recipients,
+           COUNT(*) FILTER (WHERE transaction_class = 'A2P')                                   AS a2p_volume,
+           SUM(amount) FILTER (WHERE transaction_class = 'A2P')                                AS a2p_value,
+           COUNT(DISTINCT recipient_user_id) FILTER (WHERE transaction_class = 'O2A')          AS o2a_recipients,
+           COUNT(*) FILTER (WHERE transaction_class = 'O2A')                                   AS o2a_volume,
+           SUM(amount) FILTER (WHERE transaction_class = 'O2A')                                AS o2a_value,
+           COUNT(DISTINCT sender_user_id) FILTER (WHERE transaction_class IN ('P2A','S2A'))    AS p2a_s2a_senders,
+           COUNT(DISTINCT recipient_user_id) FILTER (WHERE transaction_class IN ('P2A','S2A')) AS p2a_s2a_recipients,
+           COUNT(*) FILTER (WHERE transaction_class IN ('P2A','S2A'))                          AS p2a_s2a_volume,
+           SUM(amount) FILTER (WHERE transaction_class IN ('P2A','S2A'))                       AS p2a_s2a_value,
+           SUM(amount) FILTER (WHERE transaction_class = 'O2A')                                AS agent_topup_value
+       FROM agent_bio bio
+           LEFT JOIN payments_mv pm ON bio.user_id = pm.sender_user_id OR bio.user_id = pm.recipient_user_id
+       GROUP BY
+           bio.user_id
+   ),
+   balances AS (
+       WITH ut_cte AS(
+           SELECT
+               ut.user_id AS balance_user_id,
+               ut.balance last_night_balance,
+               row_number() over (partition by ut.user_id order by ut.id desc) AS rn
+           FROM public.user_transaction AS ut
+           WHERE
+               ut.inserted_at <= current_date
+               AND ut.user_id IN (SELECT user_id from agent_bio)
+       )
+       SELECT
+           balance_user_id,
+           last_night_balance
+       FROM ut_cte
+       WHERE rn=1
+   )
+   SELECT
+       *
+   FROM agent_bio AS bio
+       LEFT JOIN payments ON bio.user_id = payments.payments_user_id
+       LEFT JOIN balances ON bio.user_id = balances.balance_user_id
+);
