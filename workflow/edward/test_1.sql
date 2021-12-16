@@ -15,10 +15,6 @@
                when lower(trim(ut.source)) = 'food' and lower(trim(ut.reason)) like '%food for%' then 'food'
                else lower(ut.reason) end                                        as reason,
            ut.transaction_type,
-           sddjksdksdjsd,
-           ssdfsfsd,
-           dsdfsdfsd,
-           dfsfsdfsdf,
            balance
     from user_transaction ut
              left join "user" u on ut.user_id = u.id
